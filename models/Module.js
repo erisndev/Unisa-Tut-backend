@@ -1,11 +1,11 @@
 const mongoose = require("mongoose");
 
 const moduleSchema = new mongoose.Schema({
-  course: { type: ObjectId, ref: "Course" },
-  title: String,
+  course: { type: mongoose.Schema.Types.ObjectId, ref: "Course", required: true },
+  title: { type: String, required: true },
   description: String,
-  price: Number,
-  isActive: { type: Boolean, default: true },
+  price: { type: Number, required: true },
+  isActive: { type: Boolean, default: true }
 });
-const Module = mongoose.model("Module", moduleSchema);
-module.exports = Module;
+
+module.exports = mongoose.model("Module", moduleSchema);

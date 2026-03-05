@@ -1,10 +1,8 @@
 const mongoose = require("mongoose");
 
 const facultySchema = new mongoose.Schema({
-  facultyName: {
-    type: String,
-    required: true,
-  },
+  name: { type: String, required: true },
+  description: String
 });
-const Faculty = mongoose.model("Faculty", facultySchema);
-module.exports = Faculty;
+
+module.exports = mongoose.model("Faculty", facultySchema);
