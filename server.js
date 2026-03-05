@@ -1,31 +1,33 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const cors = require("cors");
-
 require("dotenv").config();
 
 const app = express();
 
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL,
-  }),
-);
+app.use(cors());
 app.use(express.json());
 
-// test route
+// Test route
 app.get("/", (req, res) => {
   res.send("Unisa Tut API is running");
 });
 
 // MongoDB connection
-
 const connectDB = require("./config/db");
 connectDB();
 
 // Routes
+app.use("/api/faculties", require("./routes/facultyRoutes"));
+app.use("/api/courses", require("./routes/courseRoutes"));
+app.use("/api/modules", require("./routes/moduleRoutes"));
+app.use("/api/orders", require("./routes/orderRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
 
-// start the server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  res.status(500).json({ message: err.message });
 });
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
