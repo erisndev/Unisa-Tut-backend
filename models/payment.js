@@ -1,11 +1,11 @@
 const mongoose = require("mongoose");
 
 const paymentSchema = new mongoose.Schema({
-  booking: { type: ObjectId, ref: "Booking" },
+  order: { type: mongoose.Schema.Types.ObjectId, ref: "Order", required: true },
   transactionId: String,
   amount: Number,
   status: String,
-  provider: String,
-});
-const Payment = mongoose.model("Payment", paymentSchema);
-module.exports = Payment;
+  provider: { type: String, default: "Paystack" }
+}, { timestamps: true });
+
+module.exports = mongoose.model("Payment", paymentSchema);
