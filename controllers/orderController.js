@@ -2,60 +2,121 @@ const Order = require("../models/Order");
 const Faculty = require("../models/Faculty");
 const Course = require("../models/Course");
 const Module = require("../models/Module");
+const Package = require("../models/Package");
 const { generateReference } = require("../utils/generateReference");
+const sendEmail = require("../services/sendEmail");
+const orderEmailTemplate = require("../services/orderEmailTemplate");
 const mongoose = require("mongoose");
 
-// Helper function to check if string is a valid MongoDB ObjectId
 const isValidObjectId = (id) => {
-  return mongoose.Types.ObjectId.isValid(id) && new mongoose.Types.ObjectId(id).toString() === id;
+  return (
+    mongoose.Types.ObjectId.isValid(id) &&
+    new mongoose.Types.ObjectId(id).toString() === id
+  );
 };
 
-// Create order using MongoDB ObjectIds (when frontend has backend data)
 exports.createOrder = async (req, res) => {
   try {
-    const { fullName, email, phone, facultyId, courseId, moduleIds } = req.body;
+    const {
+      fullName,
+      email,
+      phone,
+      facultyId,
+      courseId,
+      moduleIds,
+      faculty,
+      course,
+      modules,
+      packageId,
+      package: packageFromBody,
+    } = req.body;
 
-    // Find faculty
-    const faculty = await Faculty.findById(facultyId);
-    if (!faculty) {
-      return res.status(400).json({ message: "Invalid faculty" });
+    const resolvedFacultyId = facultyId || faculty;
+    const resolvedCourseId = courseId || course;
+    const resolvedModuleIds = moduleIds || modules;
+    const resolvedPackageId = packageId || packageFromBody;
+
+    if (
+      !fullName ||
+      !email ||
+      !phone ||
+      !resolvedFacultyId ||
+      !resolvedCourseId ||
+      !Array.isArray(resolvedModuleIds) ||
+      !resolvedPackageId
+    ) {
+      return res.status(400).json({
+        message:
+          "fullName, email, phone, facultyId (or faculty), courseId (or course), moduleIds (or modules[]), packageId (or package) are required",
+      });
     }
 
-    // Find course
-    const course = await Course.findOne({ _id: courseId, faculty: facultyId });
-    if (!course) {
-      return res.status(400).json({ message: "Invalid course" });
+    if (!isValidObjectId(resolvedFacultyId) || !isValidObjectId(resolvedCourseId) || !isValidObjectId(resolvedPackageId)) {
+      return res.status(400).json({ message: "Invalid id format" });
     }
 
-    // Find modules
+    const facultyDoc = await Faculty.findById(resolvedFacultyId);
+    if (!facultyDoc) return res.status(400).json({ message: "Invalid faculty" });
+
+    const courseDoc = await Course.findOne({ _id: resolvedCourseId, faculty: resolvedFacultyId });
+    if (!courseDoc) return res.status(400).json({ message: "Invalid course" });
+
     const modulesSelected = await Module.find({
-      _id: { $in: moduleIds },
-      course: courseId,
-      isActive: true
+      _id: { $in: resolvedModuleIds },
+      course: resolvedCourseId,
+      isActive: true,
     });
 
     if (!modulesSelected.length) {
       return res.status(400).json({ message: "No valid modules selected" });
     }
 
-    const totalAmount = modulesSelected.reduce((acc, m) => acc + m.price, 0);
+    const pkg = await Package.findOne({ _id: resolvedPackageId, isActive: true });
+    if (!pkg) return res.status(400).json({ message: "Invalid package" });
+
+    const totalAmount = pkg.pricePerModule * modulesSelected.length;
 
     const order = await Order.create({
       fullName,
       email,
       phone,
-      faculty: facultyId,
-      course: courseId,
-      modules: modulesSelected.map(m => m._id),
+      faculty: resolvedFacultyId,
+      course: resolvedCourseId,
+      modules: modulesSelected.map((m) => m._id),
+      package: pkg._id,
       totalAmount,
       paymentReference: generateReference(),
-      status: "pending"
+      status: "pending",
     });
 
-    res.json({ 
-      orderId: order._id.toString(), 
-      totalAmount, 
-      paymentReference: order.paymentReference 
+    // Email confirmation (best-effort)
+    try {
+      const payNowUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/pay?orderId=${order._id.toString()}&reference=${order.paymentReference}`;
+
+      await sendEmail({
+        to: email,
+        subject: "Unisa Tut - Order Created (Payment Pending)",
+        html: orderEmailTemplate({
+          fullName,
+          orderId: order._id.toString(),
+          paymentReference: order.paymentReference,
+          totalAmount,
+          packageName: pkg.name,
+          packageCode: pkg.code,
+          modulesCount: modulesSelected.length,
+          paymentStatus: order.status,
+          payNowUrl,
+          frontendUrl: process.env.FRONTEND_URL,
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to send order email:", e.message);
+    }
+
+    res.json({
+      orderId: order._id.toString(),
+      totalAmount,
+      paymentReference: order.paymentReference,
     });
   } catch (error) {
     console.error("Error creating order:", error);
@@ -63,41 +124,39 @@ exports.createOrder = async (req, res) => {
   }
 };
 
-// Create order with embedded module data (when frontend uses local data)
 exports.createOrderWithDetails = async (req, res) => {
   try {
-    const { 
-      fullName, 
-      email, 
-      phone, 
-      facultyName, 
+    const {
+      fullName,
+      email,
+      phone,
+      facultyName,
       facultyId,
-      courseName, 
+      courseName,
       courseId,
       modules,
-      totalAmount,
-      packageId 
+      packageId,
     } = req.body;
 
-    // Try to find or create faculty
+    if (!fullName || !email || !phone || !Array.isArray(modules) || !modules.length) {
+      return res.status(400).json({ message: "fullName, email, phone and modules[] are required" });
+    }
+
+    if (!packageId || !isValidObjectId(packageId)) {
+      return res.status(400).json({ message: "packageId is required" });
+    }
+
     let faculty;
     if (facultyId && isValidObjectId(facultyId)) {
       faculty = await Faculty.findById(facultyId);
     }
-    
-    // If no faculty found, create a new one
+
     if (!faculty && facultyName) {
-      faculty = await Faculty.create({
-        name: facultyName,
-        description: "Created from booking"
-      });
+      faculty = await Faculty.create({ name: facultyName, description: "Created from booking" });
     }
 
-    if (!faculty) {
-      return res.status(400).json({ message: "Faculty is required" });
-    }
+    if (!faculty) return res.status(400).json({ message: "Faculty is required" });
 
-    // Try to find or create course
     let course;
     if (courseId && isValidObjectId(courseId)) {
       course = await Course.findOne({ _id: courseId, faculty: faculty._id });
@@ -108,45 +167,35 @@ exports.createOrderWithDetails = async (req, res) => {
         faculty: faculty._id,
         title: courseName,
         description: "Created from booking",
-        isActive: true
+        isActive: true,
       });
     }
 
-    if (!course) {
-      return res.status(400).json({ message: "Course is required" });
-    }
+    if (!course) return res.status(400).json({ message: "Course is required" });
 
-    // Create or find modules
     const moduleIds = [];
-    const createdModules = [];
-
     for (const mod of modules) {
       let modDoc;
-      
-      // Only try to find if it's a valid MongoDB ObjectId
       if (mod.id && isValidObjectId(mod.id)) {
         modDoc = await Module.findById(mod.id);
       }
-
-      // Create module if not found
       if (!modDoc) {
         modDoc = await Module.create({
           course: course._id,
-          title: mod.name || mod.code,
-          description: mod.code,
-          price: mod.price || 0,
-          isActive: true
+          title: mod.name || mod.code || "Module",
+          description: mod.code || "",
+          price: Number(mod.price || 0),
+          isActive: true,
         });
       }
-
       moduleIds.push(modDoc._id);
-      createdModules.push(modDoc);
     }
 
-    // Calculate total if not provided
-    const calculatedTotal = totalAmount || createdModules.reduce((acc, m) => acc + m.price, 0);
+    const pkg = await Package.findOne({ _id: packageId, isActive: true });
+    if (!pkg) return res.status(400).json({ message: "Invalid package" });
 
-    // Create order
+    const calculatedTotal = pkg.pricePerModule * moduleIds.length;
+
     const paymentReference = generateReference();
     const order = await Order.create({
       fullName,
@@ -155,16 +204,41 @@ exports.createOrderWithDetails = async (req, res) => {
       faculty: faculty._id,
       course: course._id,
       modules: moduleIds,
+      package: pkg._id,
       totalAmount: calculatedTotal,
       paymentReference,
-      status: "pending"
+      status: "pending",
     });
 
-    res.json({ 
-      orderId: order._id.toString(), 
-      totalAmount: calculatedTotal, 
+    // Email confirmation (best-effort)
+    try {
+      const payNowUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/pay?orderId=${order._id.toString()}&reference=${paymentReference}`;
+
+      await sendEmail({
+        to: email,
+        subject: "Unisa Tut - Order Created (Payment Pending)",
+        html: orderEmailTemplate({
+          fullName,
+          orderId: order._id.toString(),
+          paymentReference,
+          totalAmount: calculatedTotal,
+          packageName: pkg.name,
+          packageCode: pkg.code,
+          modulesCount: moduleIds.length,
+          paymentStatus: order.status,
+          payNowUrl,
+          frontendUrl: process.env.FRONTEND_URL,
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to send order email:", e.message);
+    }
+
+    res.json({
+      orderId: order._id.toString(),
+      totalAmount: calculatedTotal,
       paymentReference,
-      success: true
+      success: true,
     });
   } catch (error) {
     console.error("Error creating order with details:", error);
@@ -172,15 +246,13 @@ exports.createOrderWithDetails = async (req, res) => {
   }
 };
 
-// Verify order by payment reference
 exports.verifyOrder = async (req, res) => {
   try {
-    const order = await Order.findOne({ paymentReference: req.params.reference })
-      .populate("faculty course modules");
+    const order = await Order.findOne({ paymentReference: req.params.reference }).populate(
+      "faculty course modules package"
+    );
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
     res.json(order);
   } catch (error) {
@@ -188,28 +260,25 @@ exports.verifyOrder = async (req, res) => {
   }
 };
 
-// Get all orders (for admin)
 exports.getAllOrders = async (req, res) => {
   try {
     const orders = await Order.find()
-      .populate("faculty course modules")
+      .populate("faculty course modules package")
       .sort({ createdAt: -1 });
-    
+
     res.json(orders);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// Get order by ID
 exports.getOrderById = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id)
-      .populate("faculty course modules");
+    const order = await Order.findById(req.params.id).populate(
+      "faculty course modules package"
+    );
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
     res.json(order);
   } catch (error) {

@@ -1,23 +1,21 @@
 const express = require("express");
 const router = express.Router();
 
+const adminAuth = require("../middleware/adminAuth");
 const {
   getAllCourses,
   getCourseById,
   createCourse,
   updateCourse,
   deleteCourse,
-  getModulesByCourse,
 } = require("../controllers/courseController");
 
-// Courses CRUD
+router.use(adminAuth);
+
 router.get("/", getAllCourses);
 router.get("/:id", getCourseById);
 router.post("/", createCourse);
 router.put("/:id", updateCourse);
 router.delete("/:id", deleteCourse);
-
-// Nested: modules by course
-router.get("/:id/modules", getModulesByCourse);
 
 module.exports = router;

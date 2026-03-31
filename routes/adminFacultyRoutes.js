@@ -1,23 +1,21 @@
 const express = require("express");
 const router = express.Router();
 
+const adminAuth = require("../middleware/adminAuth");
 const {
   getFaculties,
   getFacultyById,
   createFaculty,
   updateFaculty,
   deleteFaculty,
-  getCoursesByFaculty,
 } = require("../controllers/facultyController");
 
-// Faculties CRUD
+router.use(adminAuth);
+
 router.get("/", getFaculties);
 router.get("/:id", getFacultyById);
 router.post("/", createFaculty);
 router.put("/:id", updateFaculty);
 router.delete("/:id", deleteFaculty);
-
-// Nested: courses by faculty
-router.get("/:id/courses", getCoursesByFaculty);
 
 module.exports = router;

@@ -5,10 +5,12 @@ require("dotenv").config();
 
 const app = express();
 
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 // Test route
@@ -26,6 +28,15 @@ app.use("/api/courses", require("./routes/courseRoutes"));
 app.use("/api/modules", require("./routes/moduleRoutes"));
 app.use("/api/orders", require("./routes/orderRoutes"));
 app.use("/api/payments", require("./routes/paymentRoute"));
+app.use("/api/packages", require("./routes/packageRoutes"));
+
+// Admin routes (JWT protected)
+app.use("/api/admin", require("./routes/adminRoutes"));
+app.use("/api/admin/faculties", require("./routes/adminFacultyRoutes"));
+app.use("/api/admin/courses", require("./routes/adminCourseRoutes"));
+app.use("/api/admin/modules", require("./routes/adminModuleRoutes"));
+app.use("/api/admin/orders", require("./routes/adminOrderRoutes"));
+app.use("/api/admin/packages", require("./routes/adminPackageRoutes"));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

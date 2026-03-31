@@ -5,50 +5,79 @@ const Payment = require("../models/Payment");
 // Initialize Paystack payment
 exports.initializePayment = async (req, res) => {
   try {
-    const { orderId, email, amount } = req.body;
+    const { orderId, email } = req.body;
 
-    // Find the order
+    if (!orderId || !email) {
+      return res.status(400).json({ message: "orderId and email are required" });
+    }
+
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      return res.status(500).json({ message: "PAYSTACK_SECRET_KEY not configured" });
+    }
+
+    if (!process.env.FRONTEND_URL) {
+      return res.status(500).json({ message: "FRONTEND_URL not configured" });
+    }
+
+    // Find the order and compute amount server-side (do not trust client)
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
 
+    if (order.status === "paid") {
+      return res.status(400).json({ message: "Order already paid" });
+    }
+
+    const amount = Number(order.totalAmount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "Invalid order amount" });
+    }
+
     const headers = {
       Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     };
 
     const response = await axios.post(
       "https://api.paystack.co/transaction/initialize",
       {
         email,
-        amount: amount * 100, // Convert to kobo
+        amount: Math.round(amount * 100), // Convert to kobo
         reference: order.paymentReference,
         callback_url: `${process.env.FRONTEND_URL}/payment-success?order=${orderId}`,
         metadata: {
           orderId: order._id.toString(),
-          custom_fields: [
-            {
-              display_name: "Order ID",
-              variable_name: "order_id",
-              value: order._id
-            }
-          ]
-        }
+          paymentReference: order.paymentReference,
+        },
       },
       { headers }
+    );
+
+    // Create/Upsert a pending payment record
+    await Payment.findOneAndUpdate(
+      { order: order._id },
+      {
+        order: order._id,
+        transactionId: order.paymentReference,
+        amount,
+        status: "pending",
+        provider: "Paystack",
+      },
+      { upsert: true, new: true }
     );
 
     res.json({
       paymentUrl: response.data.data.authorization_url,
       reference: order.paymentReference,
-      accessCode: response.data.data.access_code
+      accessCode: response.data.data.access_code,
+      amount,
     });
   } catch (error) {
     console.error("Paystack initialization error:", error.response?.data || error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       message: "Failed to initialize payment",
-      error: error.response?.data || error.message 
+      error: error.response?.data || error.message,
     });
   }
 };
@@ -58,8 +87,12 @@ exports.verifyPayment = async (req, res) => {
   try {
     const { reference } = req.params;
 
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      return res.status(500).json({ message: "PAYSTACK_SECRET_KEY not configured" });
+    }
+
     const headers = {
-      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
     };
 
     const response = await axios.get(
@@ -67,48 +100,100 @@ exports.verifyPayment = async (req, res) => {
       { headers }
     );
 
-    const { status, amount, gateway_response, customer } = response.data.data;
+    const data = response.data.data;
+    const { status, amount, gateway_response, customer } = data;
+
+    // Find order
+    const order = await Order.findOne({ paymentReference: reference });
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const paidAmount = (amount || 0) / 100;
+    const expectedAmount = Number(order.totalAmount || 0);
 
     if (status === "success") {
-      // Update order status
-      const order = await Order.findOne({ paymentReference: reference });
-      if (order) {
-        order.status = "paid";
+      // Validate amount matches order
+      if (Math.round(paidAmount) !== Math.round(expectedAmount)) {
+        order.status = "failed";
         await order.save();
 
-        // Create payment record
-        await Payment.create({
-          order: order._id,
-          transactionId: reference,
-          amount: amount / 100,
-          status: "success",
-          provider: "Paystack"
-        });
+        await Payment.findOneAndUpdate(
+          { order: order._id },
+          {
+            order: order._id,
+            transactionId: reference,
+            amount: paidAmount,
+            status: "amount_mismatch",
+            provider: "Paystack",
+          },
+          { upsert: true, new: true }
+        );
 
-        return res.json({
-          success: true,
-          message: "Payment verified successfully",
-          order,
-          payment: {
-            status,
-            amount: amount / 100,
-            gateway_response,
-            customer
-          }
+        return res.status(400).json({
+          success: false,
+          message: "Payment amount mismatch",
+          expectedAmount,
+          paidAmount,
         });
       }
+
+      if (order.status !== "paid") {
+        order.status = "paid";
+        await order.save();
+      }
+
+      await Payment.findOneAndUpdate(
+        { order: order._id },
+        {
+          order: order._id,
+          transactionId: reference,
+          amount: paidAmount,
+          status: "success",
+          provider: "Paystack",
+        },
+        { upsert: true, new: true }
+      );
+
+      return res.json({
+        success: true,
+        message: "Payment verified successfully",
+        order,
+        payment: {
+          status,
+          amount: paidAmount,
+          gateway_response,
+          customer,
+        },
+      });
     }
+
+    // Not successful
+    order.status = "failed";
+    await order.save();
+
+    await Payment.findOneAndUpdate(
+      { order: order._id },
+      {
+        order: order._id,
+        transactionId: reference,
+        amount: paidAmount,
+        status: status || "failed",
+        provider: "Paystack",
+      },
+      { upsert: true, new: true }
+    );
 
     res.json({
       success: false,
       message: "Payment verification failed",
-      data: response.data.data
+      data,
     });
   } catch (error) {
     console.error("Paystack verification error:", error.response?.data || error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       message: "Failed to verify payment",
-      error: error.response?.data || error.message 
+      error: error.response?.data || error.message,
     });
   }
 };
@@ -116,29 +201,67 @@ exports.verifyPayment = async (req, res) => {
 // Paystack webhook handler
 exports.paymentWebhook = async (req, res) => {
   try {
-    const event = req.body;
+    // Verify event signature (required for production)
+    const signature = req.headers["x-paystack-signature"];
+    if (!signature || !process.env.PAYSTACK_SECRET_KEY) {
+      return res.sendStatus(401);
+    }
 
-    // Verify event signature in production
-    // const hash = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(JSON.stringify(req.body)).digest('hex');
-    // if (hash !== req.headers['x-paystack-signature']) {
-    //   return res.sendStatus(401);
-    // }
+    const crypto = require("crypto");
+    const hash = crypto
+      .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (hash !== signature) {
+      return res.sendStatus(401);
+    }
+
+    const event = req.body;
 
     if (event.event === "charge.success") {
       const orderRef = event.data.reference;
       const order = await Order.findOne({ paymentReference: orderRef });
 
-      if (order && order.status !== "paid") {
-        order.status = "paid";
-        await order.save();
+      if (order) {
+        const paidAmount = (event.data.amount || 0) / 100;
+        const expectedAmount = Number(order.totalAmount || 0);
 
-        await Payment.create({
-          order: order._id,
-          transactionId: event.data.id,
-          amount: event.data.amount / 100,
-          status: "success",
-          provider: "Paystack"
-        });
+        if (Math.round(paidAmount) !== Math.round(expectedAmount)) {
+          order.status = "failed";
+          await order.save();
+
+          await Payment.findOneAndUpdate(
+            { order: order._id },
+            {
+              order: order._id,
+              transactionId: String(event.data.id || orderRef),
+              amount: paidAmount,
+              status: "amount_mismatch",
+              provider: "Paystack",
+            },
+            { upsert: true, new: true }
+          );
+
+          return res.sendStatus(200);
+        }
+
+        if (order.status !== "paid") {
+          order.status = "paid";
+          await order.save();
+        }
+
+        await Payment.findOneAndUpdate(
+          { order: order._id },
+          {
+            order: order._id,
+            transactionId: String(event.data.id || orderRef),
+            amount: paidAmount,
+            status: "success",
+            provider: "Paystack",
+          },
+          { upsert: true, new: true }
+        );
 
         console.log(`Order ${order._id} marked as paid via webhook`);
       }
@@ -156,7 +279,7 @@ exports.getPaymentStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    const order = await Order.findById(orderId).populate("faculty course modules");
+    const order = await Order.findById(orderId).populate("faculty course modules package");
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
