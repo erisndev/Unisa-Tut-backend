@@ -8,11 +8,15 @@ exports.initializePayment = async (req, res) => {
     const { orderId, email } = req.body;
 
     if (!orderId || !email) {
-      return res.status(400).json({ message: "orderId and email are required" });
+      return res
+        .status(400)
+        .json({ message: "orderId and email are required" });
     }
 
     if (!process.env.PAYSTACK_SECRET_KEY) {
-      return res.status(500).json({ message: "PAYSTACK_SECRET_KEY not configured" });
+      return res
+        .status(500)
+        .json({ message: "PAYSTACK_SECRET_KEY not configured." });
     }
 
     if (!process.env.FRONTEND_URL) {
@@ -51,7 +55,7 @@ exports.initializePayment = async (req, res) => {
           paymentReference: order.paymentReference,
         },
       },
-      { headers }
+      { headers },
     );
 
     // Create/Upsert a pending payment record
@@ -64,7 +68,7 @@ exports.initializePayment = async (req, res) => {
         status: "pending",
         provider: "Paystack",
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
     res.json({
@@ -74,7 +78,10 @@ exports.initializePayment = async (req, res) => {
       amount,
     });
   } catch (error) {
-    console.error("Paystack initialization error:", error.response?.data || error.message);
+    console.error(
+      "Paystack initialization error:",
+      error.response?.data || error.message,
+    );
     res.status(500).json({
       message: "Failed to initialize payment",
       error: error.response?.data || error.message,
@@ -88,7 +95,9 @@ exports.verifyPayment = async (req, res) => {
     const { reference } = req.params;
 
     if (!process.env.PAYSTACK_SECRET_KEY) {
-      return res.status(500).json({ message: "PAYSTACK_SECRET_KEY not configured" });
+      return res
+        .status(500)
+        .json({ message: "PAYSTACK_SECRET_KEY not configured" });
     }
 
     const headers = {
@@ -97,7 +106,7 @@ exports.verifyPayment = async (req, res) => {
 
     const response = await axios.get(
       `https://api.paystack.co/transaction/verify/${reference}`,
-      { headers }
+      { headers },
     );
 
     const data = response.data.data;
@@ -127,7 +136,7 @@ exports.verifyPayment = async (req, res) => {
             status: "amount_mismatch",
             provider: "Paystack",
           },
-          { upsert: true, new: true }
+          { upsert: true, new: true },
         );
 
         return res.status(400).json({
@@ -152,7 +161,7 @@ exports.verifyPayment = async (req, res) => {
           status: "success",
           provider: "Paystack",
         },
-        { upsert: true, new: true }
+        { upsert: true, new: true },
       );
 
       return res.json({
@@ -181,7 +190,7 @@ exports.verifyPayment = async (req, res) => {
         status: status || "failed",
         provider: "Paystack",
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
     res.json({
@@ -190,7 +199,10 @@ exports.verifyPayment = async (req, res) => {
       data,
     });
   } catch (error) {
-    console.error("Paystack verification error:", error.response?.data || error.message);
+    console.error(
+      "Paystack verification error:",
+      error.response?.data || error.message,
+    );
     res.status(500).json({
       message: "Failed to verify payment",
       error: error.response?.data || error.message,
@@ -240,7 +252,7 @@ exports.paymentWebhook = async (req, res) => {
               status: "amount_mismatch",
               provider: "Paystack",
             },
-            { upsert: true, new: true }
+            { upsert: true, new: true },
           );
 
           return res.sendStatus(200);
@@ -260,7 +272,7 @@ exports.paymentWebhook = async (req, res) => {
             status: "success",
             provider: "Paystack",
           },
-          { upsert: true, new: true }
+          { upsert: true, new: true },
         );
 
         console.log(`Order ${order._id} marked as paid via webhook`);
@@ -279,7 +291,9 @@ exports.getPaymentStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    const order = await Order.findById(orderId).populate("faculty course modules package");
+    const order = await Order.findById(orderId).populate(
+      "faculty course modules package",
+    );
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
@@ -289,7 +303,7 @@ exports.getPaymentStatus = async (req, res) => {
     res.json({
       order,
       payment,
-      paymentStatus: order.status
+      paymentStatus: order.status,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
