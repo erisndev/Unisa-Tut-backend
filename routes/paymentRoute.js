@@ -1,10 +1,10 @@
 const express = require("express");
 const router = express.Router();
-const { 
-  initializePayment, 
-  verifyPayment, 
+const {
+  initializePayment,
+  verifyPayment,
   paymentWebhook,
-  getPaymentStatus 
+  getPaymentStatus,
 } = require("../controllers/paymentController");
 
 // Initialize payment
